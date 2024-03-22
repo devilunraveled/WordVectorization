@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+INLP_Assignment_3-1.pdf
+
+corpus/
 # C extensions
 *.so
 
