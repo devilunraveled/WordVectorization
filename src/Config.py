@@ -28,11 +28,21 @@ class SVDConfig(Constants):
     numWords = 1000
     
     # Embeddding Size
-    EmbeddingSize = 300
+    EmbeddingSize = 100
 
     # Context window
-    contextWindow = 5
+    contextWindow = 2
 
 
 class Word2VecConfig(Constants):
-    pass 
+    # Embeddding Size
+    EmbeddingSize = 100
+
+    # Negative Samples
+    negativeSamples = 1
+
+    #number of epochs
+    epochs = 10
+
+    #batch size
+    batchSize = 65568
