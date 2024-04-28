@@ -13,20 +13,21 @@ import pickle
 import torch
 import torch.optim as Optimizer
 import torch.nn as NeuralNetwork
-from torch import sigmoid as Sigmoid
+from torch import floor, sigmoid as Sigmoid
 from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import DataLoader
 import random
 
-from .Config import SVDConfig, Structure, Word2VecConfig
+from .Config import Constants, SVDConfig, Structure, Word2VecConfig
 
 class Dataset:
     def __init__(self, 
                  trainPath : str  = Structure.trainPath,
                  testPath  : str  = Structure.testPath,
-                 forceNew  : bool = False,
-                 fileName  : str  = "dataset.pickle"
-                 ):
+                 fileName  : str  = "dataset.pkl",
+                 svdLoad   : bool = False,
+                 word2VecLoad : bool = False
+                 ) -> None:
         """
             @param trainPath: Path to train.csv
             @param testPath: Path to test.csv
@@ -34,31 +35,40 @@ class Dataset:
         self.trainPath = trainPath
         self.testPath = testPath
         self.fileName = fileName
-  
-        if not forceNew :
-            loaded = self.loadDataset()
-            if loaded :
-                return
-        
-        self.vocab = OrderedSet(set())
-        self.data = []
-        self.tokenizedData = []
 
-    def saveDataset(self) -> None:
+        self.vocab = OrderedSet(set())
+        self.tokenizedData = []
+        self.labels = []
+
+        self.testData = []
+        self.testLabels = []
+        self.data = None
+
+        if word2VecLoad:
+            self.word2VecEmbedding = self.loadData(fileName = f"word2vecEmbedding_{Word2VecConfig.contextWindow}.pkl", dataName = "word2vecEmbedding")
+
+        if svdLoad:
+            self.SVDEmbedding = self.loadData(fileName = f"svdEmbeddings_{SVDConfig.contextWindow}.pkl", dataName = "SVDEmbedding")
+
+    def saveData(self, data, fileName) -> None:
         try :
-            savePathFile = Structure.corpusPath + "/" + self.fileName
+            savePathFile = Structure.corpusPath + fileName
             with open(savePathFile, "wb") as f:
-                pickle.dump(self, f)
+                pickle.dump(data, f)
+            print(f"Saved dataset to {savePathFile}.")
         except:
             print("Failed to save dataset.")
-    def loadDataset(self) -> None:
-        try :
-            savePathFile = Structure.corpusPath + "/" + self.fileName
-            with open(savePathFile, "rb") as f:
-                self.__dict__.update(pickle.load(f).__dict__)
-        except:
-            print("No dataset found. Dataset will be loaded from scratch.")
     
+    def loadData(self, fileName, dataName : str = "data"):
+        try :
+            savePathFile = Structure.corpusPath + fileName
+            with open(savePathFile, "rb") as f:
+                data = pickle.load(f)
+            print(f"Loaded {dataName} from {savePathFile}.")
+            return data
+        except :
+            print(f"Could not find {dataName}. It will be built from scratch if needed.")
+
     def getVocabulary(self) -> OrderedSet | set:
         try :
             if not self.vocab :
@@ -68,36 +78,62 @@ class Dataset:
             traceback.print_exc()
         finally:
             return self.vocab
-
-    def getData(self) -> Optional[list]:
+    
+    def getTestData(self):
         try :
-            if self.data :
-                return self.data
-            print("Parsing data...")
-            with open(self.trainPath, "r") as f:
-                self.vocab = {SVDConfig.startToken, SVDConfig.endToken, SVDConfig.unkToken}
-                skipped = False
-                numLines = sum(1 for _ in f)
-                f.seek(0)
-                with alive_bar(numLines-1) as bar:
-                    for line in f:
-                        # Skip the first line as it contains meta information.
-                        if not skipped: 
-                            skipped = True
-                            continue
-                        
-                        description : str = ' '.join(line.split(",")[1:]).strip()
-                        description = re.sub(SVDConfig.cleanser, " ", description)
+            if not self.testData :
+                self.testData = []
+                print(f"Loading test-data from {self.testPath}.")
+                with open(self.testPath, "r") as f:
+                    skipped = False
+                    numLines = sum(1 for _ in f)
+                    f.seek(0)
+                    with alive_bar(numLines-1, force_tty = True) as bar:
+                        for line in f:
+                            # Skip the first line as it contains meta information.
+                            if not skipped: 
+                                skipped = True
+                                continue
+                            
+                            label = int(line.split(",")[0])
+                            description : str = ' '.join(line.split(",")[1:]).strip()
+                            description = re.sub(SVDConfig.cleanser, " ", description)
 
-                        self.data.append( SVDConfig.startToken + ' ' + description + ' ' + SVDConfig.endToken )
-                        self.tokenizedData.append([ word for word in Tokenizer(description) ])
-                        self.vocab.update(set(self.tokenizedData[-1]))
-                        bar()
+                            self.testData.append( [word for word in Tokenizer(description)] )
+                            self.testLabels.append(label)
+                            bar()
         except:
             import traceback 
             traceback.print_exc()
-        finally:
-            return self.data
+    def getData(self) -> Optional[list]:
+        try :
+            if self.data is None:
+                self.data = []
+                print(f"Loading data from {self.trainPath}.")
+                with open(self.trainPath, "r") as f:
+                    self.vocab = {SVDConfig.startToken, SVDConfig.endToken, SVDConfig.unkToken}
+                    skipped = False
+                    numLines = sum(1 for _ in f)
+                    f.seek(0)
+                    with alive_bar(numLines-1, force_tty = True) as bar:
+                        for line in f:
+                            # Skip the first line as it contains meta information.
+                            if not skipped: 
+                                skipped = True
+                                continue
+                            
+                            label = int(line.split(",")[0])
+                            description : str = ' '.join(line.split(",")[1:]).strip()
+                            description = re.sub(SVDConfig.cleanser, " ", description)
+
+                            self.data.append( SVDConfig.startToken + ' ' + description + ' ' + SVDConfig.endToken )
+                            self.tokenizedData.append([ word for word in Tokenizer(description) ])
+                            self.vocab.update(set(self.tokenizedData[-1]))
+                            self.labels.append(label)
+                            bar()
+        except:
+            import traceback 
+            traceback.print_exc()
 
     def getCoocurenceMatrix(self, sparse : bool = False) -> Optional[dict] | Optional[list[list]]:
         """ 
@@ -116,22 +152,20 @@ class Dataset:
         except:
             import traceback 
             traceback.print_exc()
-        finally:
-            self.saveDataset()
     
     def __getSparseCoocurenceMatrix__(self):
         """
             Returns a sparse co-occurence matrix
             as a list of lists.
         """
-        if not hasattr(self, "mapping") :
+        if not hasattr(self, "mapping") or self.mapping is None:
             self.__constructBidict__()
         
         print("Creating sparse co-occurence matrix...")
         matrixDimension = len(self.vocab)
         sparseMatrix = LilMatrix((matrixDimension, matrixDimension), dtype = "float64")
         
-        with alive_bar(len(self.tokenizedData)) as bar:
+        with alive_bar(len(self.tokenizedData), force_tty = True) as bar:
             for sentence in self.tokenizedData:
                 for index, token in enumerate(sentence):
                     windowStart = max(0, index - SVDConfig.contextWindow)
@@ -147,7 +181,7 @@ class Dataset:
             based on the number of words in the config.
         """
 
-        if not self.mapping:
+        if not hasattr(self, "mapping") or self.mapping is None:
             self.__constructBidict__()
 
         def acceptable(word : str ) -> bool :
@@ -180,8 +214,8 @@ class Dataset:
             indices = [ i for i,token in enumerate(line) if token == word ]
             
             for index in indices:
-                start = max(0,index - SVDConfig.contextWindow)
-                end = min(len(line) - 1, index + SVDConfig.contextWindow)
+                start = max(0,index - Word2VecConfig.contextWindow)
+                end = min(len(line) - 1, index + Word2VecConfig.contextWindow)
                 
                 context.extend(line[start : end + 1])
         except:
@@ -217,9 +251,10 @@ class Dataset:
             the index for ease of mapping.
         """
         try :
-            if not self.vocab :
+            if not hasattr(self, "vocab") or not self.vocab :
                 self.getData()
-
+            
+            print("Constructing bidict mapping...")
             self.mapping = bidict({ word : index for index, word in enumerate(self.vocab)} )
             ## Replace the first three mappings to the custom tokens.
         except:
@@ -233,10 +268,6 @@ class Dataset:
         """
         
         try :
-            if hasattr(self, 'U') :
-                print("SVD already performed. Skipping...")
-                return
-
             if sparse:
                 if ( not hasattr(self, 'SparseCoOcMatrix') ):
                     self.getCoocurenceMatrix(sparse = True)
@@ -257,7 +288,6 @@ class Dataset:
                 self.S = S
                 self.Vt = Vt
 
-            self.saveDataset()
         except:
             import traceback
             traceback.print_exc()
@@ -266,24 +296,26 @@ class Dataset:
         try :
             self.getData()
             self.__constructBidict__()
-            
-            self.word2VecDataPoints = []
-            print(f"Preparing data for Word2Vec...")
-            with alive_bar(len(self.tokenizedData)) as bar:
-                for sentence in self.tokenizedData:
-                    for index, token in enumerate(sentence):
-                        window = sentence[max(0,index - SVDConfig.contextWindow) : index] + sentence[index + 1 : index + 1 + SVDConfig.contextWindow]
-                        for word in window:
-                            if word in self.vocab:
-                                self.word2VecDataPoints.append( (self.mapping[token], self.mapping[word], True) )
-                            for _ in range(Word2VecConfig.negativeSamples):
-                                randomWord = random.randint(0, len(self.vocab) - 1)
-                                self.word2VecDataPoints.append( (self.mapping[token], randomWord, False) )
-                    bar()
+            self.getWord2VecDataPoints()
         except:
             import traceback 
             traceback.print_exc()
     
+    def getWord2VecDataPoints(self):
+        self.word2VecDataPoints = []
+        print(f"Preparing data for Word2Vec...")
+        with alive_bar(len(self.tokenizedData), force_tty=True) as bar:
+            for sentence in self.tokenizedData:
+                for index, token in enumerate(sentence):
+                    window = sentence[max(0,index - Word2VecConfig.contextWindow) : index] + sentence[index + 1 : index + 1 + Word2VecConfig.contextWindow]
+                    for word in window:
+                        if word in self.vocab:
+                            self.word2VecDataPoints.append( (self.mapping[token], self.mapping[word], True) )
+                        # for _ in range(Word2VecConfig.negativeSamples):
+                        #     randomWord = random.randint(0, len(self.vocab) - 1)
+                        #     self.word2VecDataPoints.append( (self.mapping[token], randomWord, False) )
+                bar()
+
     def getWordEmbedding(self, word : str) -> list:
         """
             Get the embedding for the word in the vocabulary.
@@ -300,68 +332,153 @@ class Dataset:
                 return []
             return self.U[self.mapping[word]]
     
-    def getWord2VecEmbedding(self) -> None:
+    def prepareWord2VecEmbedding(self) -> None:
         """
             Get the embedding for the word in the vocabulary.
         """
         
-        self.prepareData()
+        if not hasattr(self, 'word2VecDataPoints'):
+            self.prepareData()
         
         try :
             if not hasattr(self, 'word2Vec'):
+                print("Initializing Word2Vec...")
                 self.word2Vec = Word2Vec(mapping = self.mapping, word2VecDataPoints = self.word2VecDataPoints)
         except:
             import traceback 
             traceback.print_exc()
         finally:
             if self.word2Vec is not None:
-                self.word2Vec.trainEmbeddings()
+                if self.word2Vec.trained is False:
+                    print("Training Word2Vec...")
+                    self.word2Vec.trainEmbeddings()
     
+    def setSVDEmbeddings(self):
+        if not hasattr(self, 'U') or self.U is None:
+            self.performSVD(sparse = True)
+        
+        print("Initializing SVD Embeddings...")
+        self.SVDEmbedding = {}
+        try :
+            if self.U is None :
+                raise Exception("SVD could not be performed correctly.")
+            for word in self.mapping :
+                self.SVDEmbedding[word] = self.U[self.mapping[word]]
+        except:
+            import traceback 
+            traceback.print_exc()
+        finally:
+            if self.SVDEmbedding is not None:
+                print("Saving SVD Embeddings...")
+                self.saveData(data = self.SVDEmbedding, fileName = f"svdEmbeddings_{SVDConfig.contextWindow}.pkl")
+
+    def getSVDEmbedding(self, word : str ):
+        try :
+            if not hasattr(self, 'SVDEmbedding') or self.SVDEmbedding is None or not self.SVDEmbedding:
+                print(f"Could not get SVDEmbeddings, preparing the same...")
+                self.setSVDEmbeddings()
+            if self.SVDEmbedding is None :
+                raise Exception("SVD could not be performed correctly.")
+            return torch.tensor(self.SVDEmbedding.get(word, self.SVDEmbedding[Constants.unkToken]).copy()).float()
+        except:
+            import traceback 
+            traceback.print_exc()
+            return torch.tensor([])
+
+    def setWord2VecEmbeddings(self):
+        if not hasattr(self, 'word2Vec') or self.word2Vec is None:
+            self.prepareWord2VecEmbedding()
+        print("Initializing Word2Vec Embeddings...")
+        self.word2VecEmbedding = {}
+
+        try :
+            if self.word2Vec is None :
+                raise Exception("Word2Vec could not be performed correctly.")
+            for word in self.mapping :
+                self.word2VecEmbedding[word] = self.word2Vec.getWordEmbedding(word).cpu().detach()
+        except:
+            import traceback 
+            traceback.print_exc()
+        finally:
+            if self.word2VecEmbedding is not None:
+                self.saveData(data = self.word2VecEmbedding, fileName = f"word2vecEmbedding_{Word2VecConfig.contextWindow}.pkl")
+    
+    def getWord2VecEmbedding(self, word : str):
+        try :
+            if not hasattr(self, 'word2VecEmbedding') or self.word2VecEmbedding is None or not self.word2VecEmbedding:
+                self.setWord2VecEmbeddings()
+            if self.word2VecEmbedding is None :
+                raise Exception("Word2Vec could not be performed correctly.")
+            return self.word2VecEmbedding.get(word, self.word2VecEmbedding[Constants.unkToken])
+        except:
+            import traceback 
+            traceback.print_exc()
+            return torch.tensor([])
+
 class CustomDataset(TorchDataset):
-    def __init__(self, word2VecDataPoints : list):
+    def __init__(self, word2VecDataPoints : list, vocabLength : int) -> None:
         self.word2VecDataPoints = word2VecDataPoints
+        self.vocabLength = vocabLength
     
     def __len__(self):
-        return len(self.word2VecDataPoints)
+        return len(self.word2VecDataPoints)*(Word2VecConfig.negativeSamples + 1)
 
     def __getitem__(self, index):
-        point = self.word2VecDataPoints[index]
-        return torch.tensor(point[0], dtype = torch.int64), torch.tensor(point[1], dtype = torch.int64), torch.tensor(point[2], dtype = torch.float)
+        actualIndex = index // (Word2VecConfig.negativeSamples + 1)
 
+        if index % (Word2VecConfig.negativeSamples + 1) == 0 :
+            dataPoint = self.word2VecDataPoints[actualIndex]
+            return dataPoint
+        else :
+            dataPoint = self.word2VecDataPoints[actualIndex]
+            randomWord = random.randint(0, self.vocabLength - 1)
+            return ( dataPoint[0], randomWord, False )
+        
 class Word2Vec(NeuralNetwork.Module):
     def __init__(self, mapping : bidict, embeddingSize : int = Word2VecConfig.EmbeddingSize, word2VecDataPoints : list = [] ) -> None:
         self.mapping = mapping
         super().__init__()
-
+        
+        self.deviceString = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # self.deviceString = 'cpu'
         self.EmbeddingSize = embeddingSize
         self.contextEmbedding = NeuralNetwork.Embedding(num_embeddings = len(self.mapping), embedding_dim = embeddingSize)
         self.wordEmbedding = NeuralNetwork.Embedding(num_embeddings = len(self.mapping), embedding_dim = embeddingSize)
         self.criterion = NeuralNetwork.BCELoss()
-        self.optimizer = Optimizer.Adam(self.parameters(), lr = 0.01)
-        self.dataset = CustomDataset(word2VecDataPoints)
-        self.data = DataLoader(self.dataset, batch_size = Word2VecConfig.batchSize, shuffle = True)
-        self.to(torch.device(('cuda' if torch.cuda.is_available() else 'cpu')))
-
+        self.optimizer = Optimizer.Adam(self.parameters(), lr = 0.002)
+        self.dataset = CustomDataset(word2VecDataPoints, len(self.mapping))
+        self.data = DataLoader(self.dataset, 
+                               batch_size = Word2VecConfig.batchSize, 
+                               shuffle = True, 
+                               pin_memory=True,
+                               pin_memory_device=self.deviceString,
+                               num_workers=8)
+        print(f"Using {self.deviceString} as device.")
+        self.trained = False
+        self.device = torch.device(self.deviceString)
+        self.to(self.device)
+        
     def forward(self, word, context):
         out1 = self.contextEmbedding(context)
         out2 = self.wordEmbedding(word)
         out = torch.bmm(out1.unsqueeze(1), out2.unsqueeze(2)).squeeze()
         return Sigmoid(out)
 
-    def trainEmbeddings(self, numEpochs : int = Word2VecConfig.epochs):
+    def trainEmbeddings(self, numEpochs : int = Word2VecConfig.epochs, retrain : bool = False):
         try :
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            if hasattr(self, 'wordEmbeddings') :
-                print("Word2Vec already trained. Skipping...")
-                return
-            
+            if not retrain :
+                if self.trained :
+                    print("Word2Vec already trained. Skipping...")
+                    return
+
             for epoch in range(numEpochs):
                 avgLoss = 0
-                with alive_bar(len(self.data)) as bar:
+                with alive_bar(len(self.data), force_tty = True) as bar:
                     for word, context, label in self.data:
-                        word = word.to(device)
-                        context = context.to(device)
-                        label = label.to(device)
+                        word = word.to(self.device)
+                        context = context.to(self.device)
+                        label = label.float().to(self.device)
+                        
                         output = self(word, context)
                         loss = self.criterion(output, label)
                         
@@ -370,8 +487,20 @@ class Word2Vec(NeuralNetwork.Module):
                         avgLoss += loss.item()
                         self.optimizer.step()
                         bar()
-                    avgLoss /= len(self.dataset)
+                    avgLoss /= len(self.data)
                     print(f"Epoch : {epoch+1}, Loss : {avgLoss:.4f}")
+            self.trained = True 
         except:
             import traceback
             traceback.print_exc()
+
+    def getWordEmbedding(self, word : str):
+        try :
+            if not self.trained :
+                self.trainEmbeddings()
+        except:
+            import traceback
+            traceback.print_exc()
+        finally :
+            wordIndex = torch.tensor([self.mapping[word]], dtype = torch.long).to(self.device)
+            return self.wordEmbedding(wordIndex) + self.contextEmbedding(wordIndex)
